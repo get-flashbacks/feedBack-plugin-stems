@@ -209,6 +209,10 @@ import {
 
     // ── Teardown ──
     function teardown() {
+        // Defensive reset: a new song load starting mid-takeover (or after a
+        // crash before the flag was cleared) must not leave togglePlay()
+        // permanently ignoring real pause failures. See #39.
+        window._stemsRerouteInProgress = false;
         cleanupPointerHandlers();
         if (S.pollHandle !== null) {
             clearInterval(S.pollHandle);
@@ -770,7 +774,11 @@ import {
 
     // ── Main entry: called after song_info arrives ──
     async function onSongReady() {
+        console.log('[stems debug] onSongReady called, gen was:', S.loadGeneration);
         teardown();
+        const gen = S.loadGeneration;
+        const abortController = new AbortController();
+        S.abortController = abortController;
         const info = currentSongInfo();
         const stems = (info && info.stems) || [];
         // Archive or stem-less sloppak — no graph to build, but keep the event
@@ -784,6 +792,7 @@ import {
         // Done before buildGraphFromBuffers so the graph is built for the right
         // path. Falls back to legacy (pitch-coupling) playback otherwise.
         S.useWorklet = await ensureWorklet();
+        if (gen !== S.loadGeneration) return;
         if (!S.useWorklet && !S.workletWarned) {
             S.workletWarned = true;
             console.warn('[stems] AudioWorklet unavailable — speed control will change pitch (legacy mode)');
@@ -794,10 +803,12 @@ import {
         // refuse the takeover and let core's native <audio> play the guitar
         // stem alone (degraded, but better than a non-functional transport).
         installAudioShims();
+        console.log('[stems debug] shimsUsable:', SH.shimsUsable, 'useWorklet:', S.useWorklet);
         if (!SH.shimsUsable) {
             console.error('[stems] #audio shims unavailable; sloppak playback handed back to core <audio>');
             return;
         }
+        if (gen !== S.loadGeneration) return;
         S.sloppakActive = true;
 
         // server.py points the core <audio> at stems[0]. If the user pressed
@@ -811,16 +822,18 @@ import {
             if (!nativeCorePaused(core)) {
                 S.pendingPlay = true;
                 transport.baseOffset = nativeCoreTime(core);
+                // Mirror window._juceRerouteInProgress (static/js/transport.js):
+                // this pause is a deliberate HTML5 -> stems-Web-Audio takeover.
+                if (gen !== S.loadGeneration) return;
+                window._stemsRerouteInProgress = true;
+                nativeCorePause(core);
             }
-            nativeCorePause(core);
         }
+        console.log('[stems debug] pendingPlay:', S.pendingPlay);
 
         // teardown() above already bumped S.loadGeneration; adopt that value as
         // this load's generation. Nothing else mutates it until the next
         // teardown(), which is exactly what invalidates an in-flight load.
-        const gen = S.loadGeneration;
-        S.abortController = new AbortController();
-
         // Pristine full-mix mixdown, if the pack ships one. This is the RESERVED
         // `full` stem (feedpak §5.3), which core lifts out of `info.stems` and
         // surfaces separately — it is a mixdown, not a layer, so it must never be
@@ -845,7 +858,7 @@ import {
         let probe = null;
         if (S.useWorklet && streamingSupported()) {
             try {
-                probe = await fetch(stems[0].url, { signal: S.abortController.signal, headers: { Range: 'bytes=0-' } });
+                probe = await fetch(stems[0].url, { signal: abortController.signal, headers: { Range: 'bytes=0-' } });
             } catch (e) {
                 if (gen !== S.loadGeneration) return;
                 probe = null;
@@ -858,7 +871,7 @@ import {
         const wantedPlay = S.pendingPlay;
 
         if (probe && isWavResponse(probe)) {
-            const ok = await setupStreaming(stems, probe, fullUrl, gen);
+            const ok = await setupStreaming(stems, probe, fullUrl, gen, abortController.signal);
             // setupStreaming does NOT teardown on failure, so a stale gen here is
             // genuine supersession by a newer song (its overlay owns the screen).
             if (gen !== S.loadGeneration) return;
@@ -873,9 +886,11 @@ import {
                 // (reverts to core control) and resume core if the user wanted
                 // playback — degraded single-track audio beats a crash or a silent,
                 // paused player.
+                const shouldResume = S.pendingPlay;
                 teardown();
                 hideOverlay();
-                if (wantedPlay) {
+                window._stemsRerouteInProgress = false;
+                if (shouldResume) {
                     const c = document.getElementById('audio');
                     if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
                 }
@@ -884,6 +899,7 @@ import {
             hideOverlay();
             injectUI();
             installSongFaderBridge();
+            if (!S.pendingPlay) window._stemsRerouteInProgress = false;
             // S.buffersReady + pending-play are handled by the streaming pump.
             return;
         }
@@ -893,8 +909,8 @@ import {
         let results, fullBuf = null;
         try {
             [results, fullBuf] = await Promise.all([
-                loadStems(stems, gen, S.abortController.signal),
-                fullUrl ? loadFullMix(fullUrl, gen, S.abortController.signal) : Promise.resolve(null),
+                loadStems(stems, gen, abortController.signal),
+                fullUrl ? loadFullMix(fullUrl, gen, abortController.signal) : Promise.resolve(null),
             ]);
         } catch (e) {
             console.error('[stems] loadStems error:', e);
@@ -902,18 +918,31 @@ import {
         }
         // Superseded by a newer song while we were decoding — the newer
         // song owns the overlay now, so leave it alone.
-        if (gen !== S.loadGeneration) return;
-        if (results === null) { hideOverlay(); return; }
+        console.log('[stems debug] decode done, gen match:', gen === S.loadGeneration, 'results:', !!results);
+        if (gen !== S.loadGeneration) { console.log('[stems debug] SUPERSEDED — bailing (another onSongReady ran)'); return; }
+        if (results === null) {
+            const shouldResume = S.pendingPlay;
+            teardown();
+            hideOverlay();
+            window._stemsRerouteInProgress = false;
+            if (shouldResume) {
+                const c = document.getElementById('audio');
+                if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
+            }
+            return;
+        }
 
+        const shouldResume = S.pendingPlay;
         if (!buildGraphFromBuffers(results, fullBuf)) {
             hideOverlay();
+            window._stemsRerouteInProgress = false;
             // No stems decoded: teardown() inside buildGraphFromBuffers reverted
             // to core control (S.sloppakActive=false), so the #audio shims now
             // delegate natively. We paused core during takeover above — if the
             // user wanted playback, resume it so they aren't stranded on a
             // silent, paused player (degraded single-track playback beats
             // dead silence).
-            if (wantedPlay) {
+            if (shouldResume) {
                 const c = document.getElementById('audio');
                 if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
             }
@@ -925,7 +954,9 @@ import {
         S.buffersReady = true;
         emitStemsState('provider-ready', { stemCount: S.stemState.length, stemIds: S.stemState.map(s => s.id), stems: stemsMetaPayload() });
 
+        console.log('[stems debug] graph built OK, workletNode:', !!S.workletNode, 'pendingPlay:', S.pendingPlay);
         if (S.pendingPlay) { S.pendingPlay = false; transportPlay(); }
+        else window._stemsRerouteInProgress = false;
     }
 
     function songInfoSignature(info) {
