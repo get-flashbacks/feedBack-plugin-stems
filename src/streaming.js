@@ -287,12 +287,12 @@ export async function repositionStream(targetSec) {
 // (that would bump S.loadGeneration and hide the failure from onSongReady's
 // supersession check) — the caller tears down + falls back. A `false` return
 // with `gen === S.loadGeneration` is a real failure; a stale gen is supersession.
-export async function setupStreaming(stems, probeResp, fullUrl, gen) {
+export async function setupStreaming(stems, probeResp, fullUrl, gen, signal = S.abortController.signal) {
     // 1. Open readers + parse headers for every stem (and the full mix).
     let restResps = [];
     try {
         restResps = await Promise.all(stems.slice(1).map((s) =>
-            fetch(s.url, { signal: S.abortController.signal, headers: { Range: 'bytes=0-' } })));
+            fetch(s.url, { signal, headers: { Range: 'bytes=0-' } })));
     } catch (e) {
         if (gen !== S.loadGeneration) return false;
         console.warn('[stems] stem fetch failed; cannot stream:', e);
@@ -303,7 +303,7 @@ export async function setupStreaming(stems, probeResp, fullUrl, gen) {
     let fullResp = null;
     if (fullUrl) {
         try {
-            const fr = await fetch(fullUrl, { signal: S.abortController.signal, headers: { Range: 'bytes=0-' } });
+            const fr = await fetch(fullUrl, { signal, headers: { Range: 'bytes=0-' } });
             if (gen !== S.loadGeneration) { try { fr.body && fr.body.cancel(); } catch (_) {} return false; }
             if (isWavResponse(fr)) fullResp = fr; else { try { fr.body && fr.body.cancel(); } catch (_) {} }
         } catch (_) { /* no full mix → separated stems only */ }

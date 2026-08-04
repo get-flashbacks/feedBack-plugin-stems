@@ -185,7 +185,10 @@ export function transportPlay() {
     startSources(offset);
     // startSources may have skipped every stem (all exhausted at offset).
     // Only fire `play` if playback actually began.
-    if (transport.playing) dispatchAudioEvent('play');
+    if (transport.playing) {
+        window._stemsRerouteInProgress = false;
+        dispatchAudioEvent('play');
+    }
     flushPendingPlayResolvers();
 }
 
