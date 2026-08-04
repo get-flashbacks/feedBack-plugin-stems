@@ -932,6 +932,7 @@ import {
             return;
         }
 
+        const shouldResume = S.pendingPlay;
         if (!buildGraphFromBuffers(results, fullBuf)) {
             hideOverlay();
             window._stemsRerouteInProgress = false;
@@ -941,7 +942,7 @@ import {
             // user wanted playback, resume it so they aren't stranded on a
             // silent, paused player (degraded single-track playback beats
             // dead silence).
-            if (wantedPlay) {
+            if (shouldResume) {
                 const c = document.getElementById('audio');
                 if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
             }
