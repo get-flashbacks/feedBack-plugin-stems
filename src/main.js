@@ -209,6 +209,10 @@ import {
 
     // ── Teardown ──
     function teardown() {
+        // Defensive reset: a new song load starting mid-takeover (or after a
+        // crash before the flag was cleared) must not leave togglePlay()
+        // permanently ignoring real pause failures. See #39.
+        window._stemsRerouteInProgress = false;
         cleanupPointerHandlers();
         if (S.pollHandle !== null) {
             clearInterval(S.pollHandle);
@@ -770,6 +774,7 @@ import {
 
     // ── Main entry: called after song_info arrives ──
     async function onSongReady() {
+        console.log('[stems debug] onSongReady called, gen was:', S.loadGeneration);
         teardown();
         const info = currentSongInfo();
         const stems = (info && info.stems) || [];
@@ -794,6 +799,7 @@ import {
         // refuse the takeover and let core's native <audio> play the guitar
         // stem alone (degraded, but better than a non-functional transport).
         installAudioShims();
+        console.log('[stems debug] shimsUsable:', SH.shimsUsable, 'useWorklet:', S.useWorklet);
         if (!SH.shimsUsable) {
             console.error('[stems] #audio shims unavailable; sloppak playback handed back to core <audio>');
             return;
@@ -812,8 +818,18 @@ import {
                 S.pendingPlay = true;
                 transport.baseOffset = nativeCoreTime(core);
             }
+            // Mirror window._juceRerouteInProgress (static/js/transport.js):
+            // this pause is a deliberate HTML5 -> stems-Web-Audio takeover, not
+            // a real failure. Without this flag, togglePlay()'s in-flight
+            // audio.play() rejects with AbortError and its catch block resets
+            // S.isPlaying/the Play button to "paused" even though playback
+            // continues (or is about to) on our own transport — see
+            // get-flashbacks/feedBack#39. Cleared once our own transport
+            // actually starts (transportPlay()) or the takeover is abandoned.
+            window._stemsRerouteInProgress = true;
             nativeCorePause(core);
         }
+        console.log('[stems debug] pendingPlay:', S.pendingPlay);
 
         // teardown() above already bumped S.loadGeneration; adopt that value as
         // this load's generation. Nothing else mutates it until the next
@@ -875,6 +891,7 @@ import {
                 // paused player.
                 teardown();
                 hideOverlay();
+                window._stemsRerouteInProgress = false;
                 if (wantedPlay) {
                     const c = document.getElementById('audio');
                     if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
@@ -884,6 +901,7 @@ import {
             hideOverlay();
             injectUI();
             installSongFaderBridge();
+            window._stemsRerouteInProgress = false;
             // S.buffersReady + pending-play are handled by the streaming pump.
             return;
         }
@@ -902,11 +920,13 @@ import {
         }
         // Superseded by a newer song while we were decoding — the newer
         // song owns the overlay now, so leave it alone.
-        if (gen !== S.loadGeneration) return;
-        if (results === null) { hideOverlay(); return; }
+        console.log('[stems debug] decode done, gen match:', gen === S.loadGeneration, 'results:', !!results);
+        if (gen !== S.loadGeneration) { console.log('[stems debug] SUPERSEDED — bailing (another onSongReady ran)'); return; }
+        if (results === null) { hideOverlay(); window._stemsRerouteInProgress = false; return; }
 
         if (!buildGraphFromBuffers(results, fullBuf)) {
             hideOverlay();
+            window._stemsRerouteInProgress = false;
             // No stems decoded: teardown() inside buildGraphFromBuffers reverted
             // to core control (S.sloppakActive=false), so the #audio shims now
             // delegate natively. We paused core during takeover above — if the
@@ -925,6 +945,8 @@ import {
         S.buffersReady = true;
         emitStemsState('provider-ready', { stemCount: S.stemState.length, stemIds: S.stemState.map(s => s.id), stems: stemsMetaPayload() });
 
+        window._stemsRerouteInProgress = false;
+        console.log('[stems debug] graph built OK, workletNode:', !!S.workletNode, 'pendingPlay:', S.pendingPlay);
         if (S.pendingPlay) { S.pendingPlay = false; transportPlay(); }
     }
 
