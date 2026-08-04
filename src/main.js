@@ -207,7 +207,9 @@ import {
         return songKey ? { songKey, ...extra } : { ...extra };
     }
 
-    // ── Teardown ──
+    /**
+     * Cleans up the stem mixer, stops playback, and restores core audio control.
+     */
     function teardown() {
         // Defensive reset: a new song load starting mid-takeover (or after a
         // crash before the flag was cleared) must not leave togglePlay()
@@ -772,7 +774,15 @@ import {
         }
     }
 
-    // ── Main entry: called after song_info arrives ──
+    /**
+     * Initializes stem playback for the loaded song.
+     * 
+     * Loads audio stems, selects a playback strategy (streaming for WAV audio,
+     * full decode for OGG), and builds the audio graph for stem mixing. If any
+     * step fails, playback degrades to native HTML5 audio. For songs with no stems
+     * or on unavailable hardware, emits a provider-ready event without building
+     * the stem graph.
+     */
     async function onSongReady() {
         console.log('[stems debug] onSongReady called, gen was:', S.loadGeneration);
         teardown();
@@ -959,6 +969,11 @@ import {
         else window._stemsRerouteInProgress = false;
     }
 
+    /**
+     * Generates a deterministic signature for the current song and its stem configuration.
+     * @param {Object} info - Optional song metadata containing stems and filename.
+     * @return {string} A signature string that uniquely identifies the song state.
+     */
     function songInfoSignature(info) {
         const stems = Array.isArray(info && info.stems) ? info.stems : [];
         const filename = (info && info.filename) || (window.slopsmith && window.slopsmith.currentSong && window.slopsmith.currentSong.filename) || S.currentFilename || '';

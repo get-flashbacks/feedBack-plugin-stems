@@ -286,7 +286,15 @@ export async function repositionStream(targetSec) {
 // runs asynchronously), false on failure. On failure it does NOT teardown()
 // (that would bump S.loadGeneration and hide the failure from onSongReady's
 // supersession check) — the caller tears down + falls back. A `false` return
-// with `gen === S.loadGeneration` is a real failure; a stale gen is supersession.
+/**
+ * Set up bounded-memory streaming playback for the provided WAV stems.
+ * @param {Array} stems - Stem descriptors containing stream URLs and metadata.
+ * @param {Response} probeResp - Response containing the first stem.
+ * @param {string|null} fullUrl - Optional URL for a full-mix WAV stream.
+ * @param {number} gen - Load generation used to discard superseded setup operations.
+ * @param {AbortSignal} [signal=S.abortController.signal] - Signal used to cancel stream requests.
+ * @return {Promise<boolean>} `true` when streaming playback is initialized, `false` when setup fails or is superseded.
+ */
 export async function setupStreaming(stems, probeResp, fullUrl, gen, signal = S.abortController.signal) {
     // 1. Open readers + parse headers for every stem (and the full mix).
     let restResps = [];

@@ -169,6 +169,10 @@ export function flushPendingPlayResolvers() {
     }
 }
 
+/**
+ * Starts playback from the current position and dispatches a `play` event when playback begins.
+ * @returns {void}
+ */
 export function transportPlay() {
     resumeCtx();
     if (!S.buffersReady) { S.pendingPlay = true; return; }
