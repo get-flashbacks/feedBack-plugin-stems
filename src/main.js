@@ -886,10 +886,11 @@ import {
                 // (reverts to core control) and resume core if the user wanted
                 // playback — degraded single-track audio beats a crash or a silent,
                 // paused player.
+                const shouldResume = S.pendingPlay;
                 teardown();
                 hideOverlay();
                 window._stemsRerouteInProgress = false;
-                if (wantedPlay) {
+                if (shouldResume) {
                     const c = document.getElementById('audio');
                     if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
                 }
@@ -920,10 +921,11 @@ import {
         console.log('[stems debug] decode done, gen match:', gen === S.loadGeneration, 'results:', !!results);
         if (gen !== S.loadGeneration) { console.log('[stems debug] SUPERSEDED — bailing (another onSongReady ran)'); return; }
         if (results === null) {
+            const shouldResume = S.pendingPlay;
             teardown();
             hideOverlay();
             window._stemsRerouteInProgress = false;
-            if (wantedPlay) {
+            if (shouldResume) {
                 const c = document.getElementById('audio');
                 if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
             }
