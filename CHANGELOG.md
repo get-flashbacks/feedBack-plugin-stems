@@ -4,7 +4,13 @@ All notable changes to the Stems Toggle plugin are documented here.
 
 ## [Unreleased]
 
-- Fix stems takeover pause-state handling and add debug logging for load-generation and playback transitions.
+### Fixed
+
+- Fix stems takeover pause-state handling.
+
+### Changed
+
+- Add debug logging for load-generation and playback transitions.
 
 ## [0.9.0] — Per-stem display metadata (name/description)
 
