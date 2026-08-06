@@ -66,6 +66,23 @@ test('loadVolumes coerces valid-but-non-object JSON to {} (guards saveVolume)', 
     }
 });
 
+test('filenames are percent-encoded into the storage key, avoiding namespace collisions', () => {
+    // A filename containing this module's own ':' key separator must not
+    // land at the same key as a differently-named song.
+    saveMuted('weird:song.sloppak', [{ id: 'vocals', on: false }]);
+    assert.deepEqual([...store.keys()], ['stemsMute:weird%3Asong.sloppak']);
+    assert.deepEqual([...loadMuted('weird:song.sloppak')], ['vocals']);
+
+    saveVolume('a/b.sloppak', 'bass', 0.4);
+    assert.ok(store.has('stemsVol:a%2Fb.sloppak'));
+    assert.deepEqual(loadVolumes('a/b.sloppak'), { bass: 0.4 });
+});
+
+test('plain-ASCII filenames encode as themselves (no behavior change for the common case)', () => {
+    saveMuted('song.sloppak', [{ id: 'vocals', on: false }]);
+    assert.ok(store.has('stemsMute:song.sloppak'));
+});
+
 test('karaokeDefault returns false when localStorage throws (blocked/privacy)', () => {
     const orig = globalThis.localStorage;
     globalThis.localStorage = { getItem: () => { throw new Error('storage blocked'); } };
