@@ -78,6 +78,37 @@ test('filenames are percent-encoded into the storage key, avoiding namespace col
     assert.deepEqual(loadVolumes('a/b.sloppak'), { bass: 0.4 });
 });
 
+test('per-song muted falls back to and migrates legacy raw filename keys', () => {
+    const filename = 'set 1/live:take#ñ.sloppak';
+    const legacyKey = `stemsMute:${filename}`;
+    const encodedKey = `stemsMute:${encodeURIComponent(filename)}`;
+    store.set(legacyKey, JSON.stringify(['vocals', 'bass']));
+
+    assert.deepEqual([...loadMuted(filename)].sort(), ['bass', 'vocals']);
+    assert.equal(store.has(legacyKey), false);
+    assert.equal(store.get(encodedKey), JSON.stringify(['vocals', 'bass']));
+});
+
+test('per-song volumes fall back to and migrate legacy raw filename keys', () => {
+    const filename = 'set 1/live:take#ñ.sloppak';
+    const legacyKey = `stemsVol:${filename}`;
+    const encodedKey = `stemsVol:${encodeURIComponent(filename)}`;
+    store.set(legacyKey, JSON.stringify({ guitar: 0.35, drums: 0.8 }));
+
+    assert.deepEqual(loadVolumes(filename), { guitar: 0.35, drums: 0.8 });
+    assert.equal(store.has(legacyKey), false);
+    assert.equal(store.get(encodedKey), JSON.stringify({ guitar: 0.35, drums: 0.8 }));
+});
+
+test('encoded per-song preferences win over legacy raw filename keys', () => {
+    const filename = 'set 1/live:take#ñ.sloppak';
+    store.set(`stemsMute:${filename}`, JSON.stringify(['legacy']));
+    store.set(`stemsMute:${encodeURIComponent(filename)}`, JSON.stringify(['encoded']));
+
+    assert.deepEqual([...loadMuted(filename)], ['encoded']);
+    assert.equal(store.has(`stemsMute:${filename}`), true);
+});
+
 test('plain-ASCII filenames encode as themselves (no behavior change for the common case)', () => {
     saveMuted('song.sloppak', [{ id: 'vocals', on: false }]);
     assert.ok(store.has('stemsMute:song.sloppak'));
