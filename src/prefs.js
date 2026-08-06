@@ -14,6 +14,24 @@ function _songKey(prefix, filename) {
     return prefix + encodeURIComponent(filename);
 }
 
+function _legacySongKey(prefix, filename) {
+    return prefix + filename;
+}
+
+function _loadSongValue(prefix, filename) {
+    const key = _songKey(prefix, filename);
+    const raw = localStorage.getItem(key);
+    if (raw !== null) return raw;
+
+    const legacyKey = _legacySongKey(prefix, filename);
+    if (legacyKey === key) return null;
+    const legacyRaw = localStorage.getItem(legacyKey);
+    if (legacyRaw === null) return null;
+    localStorage.setItem(key, legacyRaw);
+    localStorage.removeItem(legacyKey);
+    return legacyRaw;
+}
+
 export function karaokeDefault() {
     try { return localStorage.getItem(KARAOKE_KEY) === '1'; }
     catch (_) { return false; }
@@ -37,7 +55,7 @@ export function saveDefaultMuted(set) {
 export function loadMuted(filename) {
     if (!filename) return null;
     try {
-        const raw = localStorage.getItem(_songKey(MUTE_KEY_PREFIX, filename));
+        const raw = _loadSongValue(MUTE_KEY_PREFIX, filename);
         if (!raw) return null;
         const arr = JSON.parse(raw);
         return Array.isArray(arr) ? new Set(arr) : null;
@@ -53,7 +71,7 @@ export function saveMuted(filename, stemStateArr) {
 export function loadVolumes(filename) {
     if (!filename) return {};
     try {
-        const raw = localStorage.getItem(_songKey(VOL_KEY_PREFIX, filename));
+        const raw = _loadSongValue(VOL_KEY_PREFIX, filename);
         const v = raw ? JSON.parse(raw) : {};
         // Must be a plain object: an array/scalar would make saveVolume() stringify
         // an array and silently drop string-keyed volume entries.
