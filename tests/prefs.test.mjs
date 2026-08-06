@@ -109,6 +109,27 @@ test('encoded per-song preferences win over legacy raw filename keys', () => {
     assert.equal(store.has(`stemsMute:${filename}`), true);
 });
 
+test('a filename matching another song\'s encoded key is never read as that song\'s legacy data', () => {
+    // Song A is legitimately named 'a/b.sloppak'; its encoded key is
+    // 'stemsMute:a%2Fb.sloppak'. Song B happens to be named literally
+    // 'a%2Fb.sloppak' — the exact string Song A's encoded key uses.
+    // Without the ambiguity guard, loadMuted('a%2Fb.sloppak') would read
+    // (and the migration path would then DELETE) Song A's live entry.
+    saveMuted('a/b.sloppak', [{ id: 'vocals', on: false }]);
+    assert.deepEqual([...store.keys()], ['stemsMute:a%2Fb.sloppak']);
+
+    assert.equal(loadMuted('a%2Fb.sloppak'), null);
+    // Song A's entry must survive completely untouched.
+    assert.deepEqual([...store.keys()], ['stemsMute:a%2Fb.sloppak']);
+    assert.deepEqual([...loadMuted('a/b.sloppak')], ['vocals']);
+});
+
+test('the same collision is avoided for volumes, not just mutes', () => {
+    saveVolume('a/b.sloppak', 'bass', 0.4);
+    assert.deepEqual(loadVolumes('a%2Fb.sloppak'), {});
+    assert.deepEqual(loadVolumes('a/b.sloppak'), { bass: 0.4 });
+});
+
 test('plain-ASCII filenames encode as themselves (no behavior change for the common case)', () => {
     saveMuted('song.sloppak', [{ id: 'vocals', on: false }]);
     assert.ok(store.has('stemsMute:song.sloppak'));

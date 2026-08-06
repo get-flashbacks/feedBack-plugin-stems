@@ -18,10 +18,29 @@ function _legacySongKey(prefix, filename) {
     return prefix + filename;
 }
 
+// A legacy raw key for `filename` is AMBIGUOUS — it could actually be some
+// other song's live *encoded* key, not real legacy data for this song — iff
+// `filename` itself round-trips as a valid percent-encoding of a different
+// string (e.g. filename "a%2Fb.sloppak" round-trips to "a/b.sloppak", which
+// is exactly the encoded key that a real song named "a/b.sloppak" would
+// use). Real-world filenames essentially never do this by accident; when
+// one does, skip the legacy fallback entirely rather than risk reading (and
+// then migrating, i.e. DELETING) another song's live entry. See stems#4
+// review: encodeURIComponent('a/b.sloppak') === 'a%2Fb.sloppak', so a song
+// literally named 'a%2Fb.sloppak' would otherwise steal and destroy
+// 'a/b.sloppak'\'s preferences on its first read.
+function _legacyKeyIsAmbiguous(filename) {
+    let decoded;
+    try { decoded = decodeURIComponent(filename); } catch (_) { return false; }
+    if (decoded === filename) return false; // nothing was encoded to begin with
+    return encodeURIComponent(decoded) === filename;
+}
+
 function _loadSongValue(prefix, filename) {
     const key = _songKey(prefix, filename);
     const raw = localStorage.getItem(key);
     if (raw !== null) return raw;
+    if (_legacyKeyIsAmbiguous(filename)) return null;
 
     const legacyKey = _legacySongKey(prefix, filename);
     if (legacyKey === key) return null;
