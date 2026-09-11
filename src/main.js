@@ -306,6 +306,25 @@ import {
         // "too many AudioContexts" warnings.
     }
 
+    // Shared recovery for every takeover-failure path (synchronous setup
+    // failure, decode failure, or an async post-setup pump failure): tear
+    // the takeover down and hand playback back to core <audio>, resuming it
+    // if playback was requested. teardown() already hides the overlay, so
+    // callers must not call hideOverlay() again themselves (Codacy review,
+    // PR #6 — the four failure sites had each grown their own copy of this
+    // sequence, with a redundant extra hideOverlay() call at three of them).
+    function _revertToCoreAudio(shouldResume) {
+        teardown();
+        window._stemsRerouteInProgress = false;
+        if (shouldResume) _resumeCoreAudio();
+    }
+    // For a failure path where teardown() already ran (buildGraphFromBuffers
+    // reverts internally before returning false) — resume-only, no re-teardown.
+    function _resumeCoreAudio() {
+        const c = document.getElementById('audio');
+        if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
+    }
+
     // setupStreaming() returning true only means the graph + worklet were
     // built; the pump that actually feeds PCM into it keeps running
     // asynchronously afterward (see runPump in streaming.js). If that pump
@@ -320,14 +339,7 @@ import {
         // Not ours anymore (already torn down, or a newer song superseded
         // this pump) — nothing to recover.
         if (!S.sloppakActive) return;
-        const shouldResume = S.pendingPlay || transport.playing;
-        teardown();
-        hideOverlay();
-        window._stemsRerouteInProgress = false;
-        if (shouldResume) {
-            const c = document.getElementById('audio');
-            if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
-        }
+        _revertToCoreAudio(S.pendingPlay || transport.playing);
     }
 
     // ── UI ──
@@ -911,14 +923,7 @@ import {
                 // (reverts to core control) and resume core if the user wanted
                 // playback — degraded single-track audio beats a crash or a silent,
                 // paused player.
-                const shouldResume = S.pendingPlay;
-                teardown();
-                hideOverlay();
-                window._stemsRerouteInProgress = false;
-                if (shouldResume) {
-                    const c = document.getElementById('audio');
-                    if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
-                }
+                _revertToCoreAudio(S.pendingPlay);
                 return;
             }
             hideOverlay();
@@ -946,31 +951,21 @@ import {
         console.log('[stems debug] decode done, gen match:', gen === S.loadGeneration, 'results:', !!results);
         if (gen !== S.loadGeneration) { console.log('[stems debug] SUPERSEDED — bailing (another onSongReady ran)'); return; }
         if (results === null) {
-            const shouldResume = S.pendingPlay;
-            teardown();
-            hideOverlay();
-            window._stemsRerouteInProgress = false;
-            if (shouldResume) {
-                const c = document.getElementById('audio');
-                if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
-            }
+            _revertToCoreAudio(S.pendingPlay);
             return;
         }
 
         const shouldResume = S.pendingPlay;
         if (!buildGraphFromBuffers(results, fullBuf)) {
-            hideOverlay();
+            // No stems decoded: teardown() inside buildGraphFromBuffers already
+            // reverted to core control (S.sloppakActive=false) and hid the
+            // overlay, so the #audio shims now delegate natively — only clear
+            // the reroute guard and resume here, no second teardown(). We
+            // paused core during takeover above — if the user wanted playback,
+            // resume it so they aren't stranded on a silent, paused player
+            // (degraded single-track playback beats dead silence).
             window._stemsRerouteInProgress = false;
-            // No stems decoded: teardown() inside buildGraphFromBuffers reverted
-            // to core control (S.sloppakActive=false), so the #audio shims now
-            // delegate natively. We paused core during takeover above — if the
-            // user wanted playback, resume it so they aren't stranded on a
-            // silent, paused player (degraded single-track playback beats
-            // dead silence).
-            if (shouldResume) {
-                const c = document.getElementById('audio');
-                if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
-            }
+            if (shouldResume) _resumeCoreAudio();
             return;
         }
         hideOverlay();
