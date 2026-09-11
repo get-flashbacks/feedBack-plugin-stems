@@ -25,10 +25,12 @@ import { karaokeDefault, loadDefaultMuted, loadMuted, loadVolumes } from './pref
 let startPendingPlay = () => {};     // resume a deferred play() once buffers are ready
 let songGain = () => 0.8;            // seed the master gain from the mixer / persisted volume
 let onWorkletMessage = () => {};     // the shared worklet 'ready'/'ended'/'pos' handler
+let onStreamFailure = () => {};      // an in-flight pump died after setup succeeded (feedBack#40)
 export function configureStreaming(hooks) {
     if (hooks.startPendingPlay) startPendingPlay = hooks.startPendingPlay;
     if (hooks.songGain) songGain = hooks.songGain;
     if (hooks.onWorkletMessage) onWorkletMessage = hooks.onWorkletMessage;
+    if (hooks.onStreamFailure) onStreamFailure = hooks.onStreamFailure;
 }
 
 const STREAM_AHEAD_SEC = 2.0;      // keep ~this far buffered ahead of pos
@@ -179,7 +181,10 @@ function waitPos() {
 
 // The pump: keep the worklet window ~STREAM_AHEAD_SEC ahead of its read
 // frontier. On the initial run, prefill then start (honouring pending play).
-async function runPump(isInitial) {
+// Exported for the pump-failure regression test (feedBack#40); not part of
+// the plugin's public API otherwise — main.js only invokes it indirectly via
+// setupStreaming()/repositionStream().
+export async function runPump(isInitial) {
     // Capture the seek token for this pump run: a seek supersedes us by bumping
     // it, so every loop guard + append re-checks it after awaits (see appendRound).
     const token = ST.streamSeekToken;
@@ -201,7 +206,16 @@ async function runPump(isInitial) {
             if (!(await appendRound(token))) break;
         }
     } catch (e) {
-        if (!ST.pumpStop && (!e || e.name !== 'AbortError')) console.warn('[stems] stream pump error:', e);
+        if (!ST.pumpStop && token === ST.streamSeekToken && (!e || e.name !== 'AbortError')) {
+            console.warn('[stems] stream pump error:', e);
+            // A seek supersedes us by bumping the token (checked above) — this is
+            // a genuine failure of the run identified by `token`, not a
+            // superseded/intentionally-stopped pump. isInitial === true means
+            // setupStreaming() already returned success and the caller believes
+            // playback is live; the caller must tear the takeover down and fall
+            // back to core <audio> instead of leaving the player silently stuck.
+            try { onStreamFailure(isInitial, e); } catch (_) {}
+        }
     }
 }
 

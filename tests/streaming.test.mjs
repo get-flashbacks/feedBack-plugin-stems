@@ -6,7 +6,10 @@ import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { S, ST } from '../src/state.js';
-import { streamingSupported, isWavResponse, streamOffsetBuffered, appendRound } from '../src/streaming.js';
+import {
+    streamingSupported, isWavResponse, streamOffsetBuffered, appendRound,
+    runPump, configureStreaming,
+} from '../src/streaming.js';
 
 test('isWavResponse: true only when content-type contains "wav"', () => {
     const mk = (ct) => ({ headers: { get: () => ct } });
@@ -98,4 +101,71 @@ test('appendRound drops the block (no post) once a seek supersedes its token', a
     assert.equal(ok, false);
     assert.deepEqual(posted, []);               // nothing posted to the worklet
     assert.equal(ST.jsWriteFrontier, 0);        // frontier NOT advanced
+});
+
+// ── Initial-prefill pump failure recovery (feedBack#40) ───────────────────────
+// setupStreaming() returns success once the graph is built; runPump(true) then
+// prefills asynchronously. A rejecting track reader during that prefill must
+// not just log-and-strand the player — it must reach the caller's recovery
+// hook so core <audio> can resume instead of staying silently paused.
+test('runPump: a reader rejection during initial prefill calls onStreamFailure(true, err)', async () => {
+    const failures = [];
+    configureStreaming({ onStreamFailure: (isInitial, err) => failures.push({ isInitial, err }) });
+    try {
+        ST.streaming = true;
+        ST.pumpStop = false;
+        ST.streamSeekToken = 1;
+        ST.streamSampleRate = 48000;
+        ST.streamTotalSamples = 480000; // 10s
+        ST.jsWriteFrontier = 0;
+        ST.lastWorkletPos = 0;
+        ST.streamTracks = [{
+            nch: 2, byteAlign: 4, totalFrames: 480000,
+            leftover: new Uint8Array(0), done: false, skipBytes: 0,
+            reader: { read: () => Promise.reject(new Error('boom')) },
+        }];
+        S.workletNode = { port: { postMessage: () => {} } };
+        S.buffersReady = false;
+
+        await runPump(true); // must not throw — the failure is routed, not rethrown
+
+        assert.equal(failures.length, 1);
+        assert.equal(failures[0].isInitial, true);
+        assert.equal(failures[0].err.message, 'boom');
+    } finally {
+        configureStreaming({ onStreamFailure: () => {} }); // don't leak into later tests
+    }
+});
+
+test('runPump: a superseded token (seek landed mid-await) does not call onStreamFailure', async () => {
+    const failures = [];
+    configureStreaming({ onStreamFailure: (isInitial, err) => failures.push({ isInitial, err }) });
+    try {
+        ST.streaming = true;
+        ST.pumpStop = false;
+        ST.streamSeekToken = 1;
+        ST.streamSampleRate = 48000;
+        ST.streamTotalSamples = 480000;
+        ST.jsWriteFrontier = 0;
+        ST.lastWorkletPos = 0;
+        ST.streamTracks = [{
+            nch: 2, byteAlign: 4, totalFrames: 480000,
+            leftover: new Uint8Array(0), done: false, skipBytes: 0,
+            reader: {
+                read: () => {
+                    // A seek supersedes this run while the read is in flight.
+                    ST.streamSeekToken = 2;
+                    return Promise.reject(new Error('boom'));
+                },
+            },
+        }];
+        S.workletNode = { port: { postMessage: () => {} } };
+        S.buffersReady = false;
+
+        await runPump(true);
+
+        assert.deepEqual(failures, []); // superseded run's failure is not "the" failure
+    } finally {
+        configureStreaming({ onStreamFailure: () => {} });
+    }
 });

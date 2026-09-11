@@ -56,6 +56,7 @@ import {
         startPendingPlay: transportPlay,   // resume a deferred play() when buffers arrive
         songGain: persistedSongGain,       // seed master gain from the mixer / persisted vol
         onWorkletMessage,                  // shared worklet 'ready'/'ended'/'pos' handler
+        onStreamFailure,                   // pump died after setup succeeded (feedBack#40)
     });
 
     // ── Plugin state ──
@@ -303,6 +304,30 @@ import {
         S.sloppakActive = false;
         // Leave S.audioCtx alive — it is reused across songs to avoid browser
         // "too many AudioContexts" warnings.
+    }
+
+    // setupStreaming() returning true only means the graph + worklet were
+    // built; the pump that actually feeds PCM into it keeps running
+    // asynchronously afterward (see runPump in streaming.js). If that pump
+    // fails — reader rejects, fetch drops — after setup already succeeded,
+    // core <audio> is left paused (silenced for the takeover) with nothing
+    // resuming it and the play request stuck pending. Mirror the recovery
+    // already used for a synchronous setupStreaming/buildGraphFromBuffers
+    // failure: tear the takeover down and hand playback back to core.
+    function onStreamFailure(isInitial, err) {
+        console.warn('[stems] stream pump failed'
+            + (isInitial ? ' during initial prefill' : '') + ':', err);
+        // Not ours anymore (already torn down, or a newer song superseded
+        // this pump) — nothing to recover.
+        if (!S.sloppakActive) return;
+        const shouldResume = S.pendingPlay || transport.playing;
+        teardown();
+        hideOverlay();
+        window._stemsRerouteInProgress = false;
+        if (shouldResume) {
+            const c = document.getElementById('audio');
+            if (c) { try { const pr = c.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {} }
+        }
     }
 
     // ── UI ──
