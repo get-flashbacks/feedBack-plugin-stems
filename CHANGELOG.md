@@ -6,6 +6,7 @@ All notable changes to the Stems Toggle plugin are documented here.
 
 ### Fixed
 
+- Recover the player when the initial streaming pump fails (feedBack#40). Previously, if `runPump()`'s prefill rejected after `setupStreaming()` had already reported success — core `<audio>` silenced for the takeover — the failure was only logged, leaving the transport stuck pending with no audible output. The pump now routes a genuine failure (not a superseded seek or an intentional stop) through the same recovery path used for a synchronous setup failure: tear the takeover down, clear the reroute guard, and resume core `<audio>` if playback was requested.
 - Fix stems takeover pause-state handling and add debug logging for load-generation and playback transitions.
 
 ### Changed
